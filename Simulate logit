@@ -1,0 +1,141 @@
+# Simulate 1,000 observations from the simple model logit(pi_i) = beta_0 + b_i for i = 1, ..., n
+#   individuals, where b_i ~ N(0, sigma^2). Thus, the model is simply an intercept plus a random effect.
+#   The two parameters that need to be estimated are beta_0 and sigma.
+
+################################################################################
+# Simulate data
+
+  n <- 1000  # Number of binomial observations
+  beta0 <- 1
+  sigma <- 2
+  individual <- 1:n  # Indicates observation number
+  numb.trials <- 10  # n_i - be careful with notation
+  trials <- rep(x = numb.trials, times = n)
+
+  # Simulate the response Y
+  set.seed(8182)
+  b <- rnorm(n = n, mean = 0, sd = sigma)
+  pi.i <- plogis(beta0 + b)
+  y <- rbinom(n = n, size = numb.trials, prob = pi.i)
+
+  #Export data
+  setwd(dir = "C:\\chris\\unl\\Dropbox\\NEW\\STAT_computing\\Integrate")
+  set1 <- data.frame(y, trials, individual)
+  write.table(x = set1, file = "glmm_data.txt", row.names = FALSE, quote = FALSE)
+
+
+################################################################################
+# Estimate model using glmer()
+
+  library(lme4)
+
+  # Estimate model with 20-point quadrature
+  mod.fit20 <- glmer(formula = y/trials ~ 1 + (1|individual), nAGQ = 20,
+    weights = trials, family = binomial(link = "logit"))
+  summary(mod.fit20)
+  logLik(mod.fit20)
+
+
+################################################################################
+# Estimate model using integrate() and optim()
+
+  my.func <- function(b, y, beta0, sigma, numb.trials) {
+    pi.i <- plogis(beta0 + b)
+    #Did not include the "n choose y" part
+    pi.i^y * (1 - pi.i)^(numb.trials - y) * dnorm(x = b, mean = 0, sd = sigma)
+  }
+
+  log.Lik.int <- function(beta.sig, y, numb.trials) {
+    beta0 <- beta.sig[1]
+    sigma <- beta.sig[2]
+    n <- length(y)
+
+    L.i <- numeric(n)
+    for(i in 1:n) {
+      L.i[i] <- integrate(f = my.func, lower = -Inf, upper = Inf, y = y[i], beta0 = beta0,
+        sigma = sigma, numb.trials = numb.trials)$value
+    }
+
+    sum(log(L.i)) #log(L)
+  }
+  log.Lik.int(beta.sig = c(beta0, sigma), y = y, numb.trials = numb.trials)
+
+  #Using the true values as the starting values of course, this could not be done in practice
+  save.opt.int <- optim(par = c(beta0, sigma), fn = log.Lik.int, method = "BFGS", y = y,
+    numb.trials = numb.trials, control = list(fnscale = -1), hessian = TRUE)
+  save.opt.int
+
+  #Estimated covariance matrix
+  cov.mat <- -solve(save.opt.int$hessian)
+  sqrt(cov.mat[1,1])  # Estimate of Var(hat(beta)_0)^0.5
+  sqrt(cov.mat[2,2])  # Estimate of Var(hat(sigma))^0.5
+
+
+
+################################################################################
+# Estimate model using Gauss-Hermite and optim()
+
+  h.u <- function(u, y, beta0, sigma, numb.trials) {
+    pi.tilde.i <- plogis(beta0 + u*sigma*sqrt(2))
+    #Did not include the "n choose y" part
+    1/sqrt(pi) * pi.tilde.i^y * (1 - pi.tilde.i)^(numb.trials-y)
+  }
+
+  library(pracma)
+  save.GH <- gaussHermite(n = 20)
+  u <- save.GH$x
+  w <- save.GH$w
+
+  log.Lik.GH <- function(beta.sig, y, u, w, numb.trials) {
+    beta0 <- beta.sig[1]
+    sigma <- beta.sig[2]
+    n <- length(y)
+
+    L.i <- numeric(n)
+    for(i in 1:n) {
+      L.i[i] <- sum(h.u(u = u, y = y[i], beta0 = beta0, sigma = sigma, numb.trials = numb.trials) * w)
+    }
+
+    sum(log(L.i)) #log(L)
+  }
+
+  #Using the true values as the starting values of course, this could not be done in practice
+  save.opt.GH <- optim(par = c(beta0, sigma), fn = log.Lik.GH, method = "BFGS", y = y, u = u, w = w,
+    numb.trials = numb.trials, control = list(fnscale = -1), hessian = TRUE)
+  save.opt.GH
+  cov.mat <- -solve(save.opt.GH$hessian)
+  sqrt(cov.mat[1,1])  # Estimate of Var(hat(beta)_0)^0.5
+  sqrt(cov.mat[2,2])  # Estimate of Var(hat(sigma))^0.5
+
+  #Try different starting values
+  save.opt.GH <- optim(par = c(0.1, 0.1), fn = log.Lik.GH, method = "BFGS", y = y, u = u, w = w,
+    numb.trials = numb.trials, control = list(fnscale = -1))
+  save.opt.GH
+
+  #Contour plot
+  beta0.seq <- seq(from = -1, to = 3, by = 0.1)
+  sigma.seq <- seq(from = 0.1, to = 4, by = 0.1)
+  save.log.Lik <- matrix(data = NA, nrow = length(beta0.seq), ncol = length(sigma.seq))
+  i <- 1
+  j <- 1
+  for (beta0 in beta0.seq) {
+    for (sigma in sigma.seq) {
+      save.log.Lik[i,j] <- log.Lik.GH(beta.sig = c(beta0, sigma), y = y, u = u, w = w, numb.trials = numb.trials)
+      j <- j + 1
+    }
+    j <- 1
+    i <- i + 1
+    print(beta0)
+  }
+
+  #save.log.Lik
+
+  contour(x = beta0.seq, y = sigma.seq, z = save.log.Lik, xlab = expression(beta[0]),
+    ylab = expression(sigma)) #Original plot w/o controlling where contours are drawn
+
+  contour(x = beta0.seq, y = sigma.seq, z = save.log.Lik, xlab = expression(beta[0]),
+    ylab = expression(sigma), levels = c(-7000, -6500, -6000, -5500, -5400, -5300, -5250, -5225))
+  abline(v = save.opt.GH$par[1], lty = "dotted")
+  abline(h = save.opt.GH$par[2], lty = "dotted")
+
+  #
