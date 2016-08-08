@@ -24,3 +24,4 @@
   write.table(x = set1, file = "glmm_data.txt", row.names = FALSE, quote = FALSE)
 
 
+################################################################################
